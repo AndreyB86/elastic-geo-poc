@@ -10,7 +10,8 @@ You have to adjust receiving data from Mongo and transform it to the index schem
 
 QueryExample: 
 
-```{
+```
+  {
     "query": {
       "bool": {
         "must": {
