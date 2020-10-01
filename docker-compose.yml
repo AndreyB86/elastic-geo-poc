@@ -1,0 +1,13 @@
+version: "3.7"
+services:
+  elasticsearch_container:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.8.0
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster
+      - discovery.type=single-node
+    ports:
+      - 9200:9200
+      - 9300:9300
+    volumes:
+      - ./tmp_data/elastic:/usr/share/elasticsearch/data
