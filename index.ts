@@ -46,12 +46,13 @@ async function doBulk(bulkData): Promise<boolean> {
   return false;
 }
 
-async function processRoad(road) {
+async function processDiagnostic(diagnostic, road) {
   let bulkDataToInsert = [];
-  const { points: rawPoints } = road;
-  const points = rawPoints || [];
+  const points = (diagnostic.segments || []).reduce((acc, current) => {
+    return [...acc, ...current.points];
+  }, []);
   let totalAdded = 0;
-  console.log(`Road ${road.name} in progress with ${points.length} points`);
+  console.log(`Road ${road.name}, diagnostic ${diagnostic.date} in progress with ${points.length} points`);
   for (let i = 0; i < points.length; i++) {
     const point = points[i];
     const docToInsert = {
@@ -74,7 +75,21 @@ async function processRoad(road) {
   if (bulkDataToInsert.length > 0) {
     await doBulk(bulkDataToInsert);
   }
-  console.log(`Road ${road.name} processed. ${points.length} points added`);
+  console.log(`Diagnostic proceed`);
+}
+
+async function processRoad(road, mongoDb) {
+  const diagnostics: any[] = await new Promise((resolve, reject) => {
+    mongoDb.collection('diagnostics').find({ roadId: mongodb.ObjectId(road._id) }).toArray((err, result) => {
+      if (err) {
+        resolve([]);
+      }
+      resolve(result);
+    });
+  });
+  for (let i = 0; i < diagnostics.length; i++) {
+    await processDiagnostic(diagnostics[i], road);
+  }
 }
 
 async function initIndex() {
@@ -91,7 +106,7 @@ async function start() {
   const roads = await getAllRoads(mongoDb);
 
   for (let i = 0; i < roads.length; i++) {
-    await processRoad(roads[i]);
+    await processRoad(roads[i], mongoDb);
     console.log(`Road ${i+1} from ${roads.length} processed.`);
   }
   console.log('finished');
