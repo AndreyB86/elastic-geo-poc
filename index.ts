@@ -36,12 +36,12 @@ async function doBulk(bulkData): Promise<boolean> {
     });
     const { body } = result;
     if (body.errors) {
-      this.loggerService.error('doBulk()', 'errors during bulk operations execution');
+      console.log('doBulk()', 'errors during bulk operations execution');
       return false;
     }
     return true;
   } catch (e) {
-    this.loggerService.error('doBulk()', 'Exception during bulk operation execution');
+    console.log('doBulk()', 'Exception during bulk operation execution');
   }
   return false;
 }
