@@ -94,8 +94,10 @@ async function start() {
     await processRoad(roads[i]);
     console.log(`Road ${i+1} from ${roads.length} processed.`);
   }
-
   console.log('finished');
+
+  // @ts-ignore
+  process.exit(0)
 }
 
 start();
