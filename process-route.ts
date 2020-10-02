@@ -1,11 +1,11 @@
 import * as mongodb from 'mongodb';
 import { Client } from '@elastic/elasticsearch';
-import { indexConfig, indexName } from './constants';
+import { indexConfig } from './constants';
 
 const client = new Client({ node: 'http://localhost:9200' })
 
-const databaseName = 'ois';
-const url = 'mongodb://localhost';
+const databaseName = 'indor_back';
+const url = 'mongodb://mongo:mongo@192.168.100.6:27017';
 
 async function connect(): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -19,10 +19,18 @@ async function connect(): Promise<any> {
   });
 }
 
-async function getAllRoads(mongoDb): Promise<any> {
+async function getRawRoad(mongoDb, roadId): Promise<any> {
   return new Promise((resolve, reject) => {
-    mongoDb.collection('roads').find({}, { order: { name: -1 } }).toArray((err, result) => {
-      resolve(result);
+    mongoDb.collection('Route').find({ _id: mongodb.ObjectId(roadId) }, {}).toArray((err, result) => {
+      resolve(result[0]);
+    });
+  });
+}
+
+async function getTemplateRoad(mongoDb, roadId): Promise<any> {
+  return new Promise((resolve, reject) => {
+    mongoDb.collection('RouteOIS').find({ _id: mongodb.ObjectId(roadId) }, {}).toArray((err, result) => {
+      resolve(result[0]);
     });
   });
 }
@@ -46,25 +54,23 @@ async function doBulk(bulkData): Promise<boolean> {
   return false;
 }
 
-async function processDiagnostic(diagnostic, road) {
+async function processRoad(road, indexName) {
   let bulkDataToInsert = [];
-  const points = (diagnostic.segments || []).reduce((acc, current) => {
-    return [...acc, ...current.points];
-  }, []);
+  const points = road.clearPoints || [];
   let totalAdded = 0;
-  console.log(`Road ${road.name}, diagnostic ${diagnostic.date} in progress with ${points.length} points`);
+  console.log(`Road ${road.name} ${points.length} points`);
   for (let i = 0; i < points.length; i++) {
     const point = points[i];
     const docToInsert = {
       location: {
-        lat: Number(point.lat),
-        lon: Number(point.lon),
+        lat: Number(point.latitude),
+        lon: Number(point.longitude),
       },
-      pk: point.pk,
-      roadId: road.roadId,
+      pk: point.picket,
+      roadId: road.rawRouteId,
       roadName: road.name
     };
-    bulkDataToInsert.push({ index: { _index: 'geoindex' } }, { ...docToInsert });
+    bulkDataToInsert.push({ index: { _index: indexName } }, { ...docToInsert });
     if (bulkDataToInsert.length >= 10000) {
       totalAdded += bulkDataToInsert.length;
       await doBulk(bulkDataToInsert);
@@ -78,22 +84,11 @@ async function processDiagnostic(diagnostic, road) {
   console.log(`Diagnostic proceed`);
 }
 
-async function processRoad(road, mongoDb) {
-  const diagnostics: any[] = await new Promise((resolve, reject) => {
-    mongoDb.collection('diagnostics').find({ roadId: mongodb.ObjectId(road._id) }).toArray((err, result) => {
-      if (err) {
-        resolve([]);
-      }
-      resolve(result);
-    });
-  });
-  for (let i = 0; i < diagnostics.length; i++) {
-    await processDiagnostic(diagnostics[i], road);
+async function initIndex(indexName) {
+  try {
+    await client.indices.delete({ index: indexName });
+  } catch (e) {
   }
-}
-
-async function initIndex() {
-  await client.indices.delete({ index: indexName });
   await client.indices.create({
     index: indexName,
     body: indexConfig,
@@ -102,17 +97,17 @@ async function initIndex() {
 
 async function start() {
   const mongoDb = await connect();
-  await initIndex();
-  const roads = await getAllRoads(mongoDb);
+  // await initIndex();
+  const rawRoad = await getRawRoad(mongoDb, '5f489b43bd06504bcf3ed467');
+  const indexName = `${rawRoad._id.toString()}`;
+  await initIndex(indexName);
+  await processRoad(rawRoad, indexName);
+  const templateRoad = await getTemplateRoad(mongoDb, '5f23d97ba2db9630cc40dc3f');
 
-  // Stress-test
-  for (let test = 0; test < 10; test++) {
-    for (let i = 0; i < roads.length; i++) {
-      await processRoad(roads[i], mongoDb);
-      console.log(`Road ${i+1} from ${roads.length} processed.`);
-    }
-    console.log(`${test} cycle completed`);
-  }
+  console.log('Template route points count', templateRoad.points.length);
+
+
+
   console.log('finished');
 
   // @ts-ignore
