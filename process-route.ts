@@ -1,3 +1,4 @@
+import moment from 'moment';
 import * as mongodb from 'mongodb';
 import { Client } from '@elastic/elasticsearch';
 import { indexConfig } from './constants';
@@ -54,9 +55,9 @@ async function doBulk(bulkData): Promise<boolean> {
   return false;
 }
 
-async function processRoad(road, indexName) {
+async function processRoad(road, indexName: string) {
   let bulkDataToInsert = [];
-  const points = road.clearPoints || [];
+  const points = road.points || [];
   let totalAdded = 0;
   console.log(`Road ${road.name} ${points.length} points`);
   for (let i = 0; i < points.length; i++) {
@@ -72,7 +73,7 @@ async function processRoad(road, indexName) {
     };
     bulkDataToInsert.push({ index: { _index: indexName } }, { ...docToInsert });
     if (bulkDataToInsert.length >= 10000) {
-      totalAdded += bulkDataToInsert.length;
+      totalAdded += bulkDataToInsert.length / 2;
       await doBulk(bulkDataToInsert);
       console.log(`${totalAdded} added`);
       bulkDataToInsert = [];
@@ -84,7 +85,7 @@ async function processRoad(road, indexName) {
   console.log(`Diagnostic proceed`);
 }
 
-async function initIndex(indexName) {
+async function initIndex(indexName: string) {
   try {
     await client.indices.delete({ index: indexName });
   } catch (e) {
@@ -95,20 +96,94 @@ async function initIndex(indexName) {
   });
 }
 
+async function findDocumentsByQuery(index: string, lat: number, lon: number): Promise<any[]> {
+  const config = {
+    index,
+    body: {
+      stored_fields: [
+        '_source'
+      ],
+      query: {
+        bool: {
+          must: {
+            match_all: {}
+          },
+          filter: {
+            geo_distance: {
+              distance: '50m',
+              location: {
+                lat,
+                lon,
+              }
+            }
+          }
+        }
+      },
+      script_fields: {
+        distance: {
+          script: {
+            params: {
+              lat,
+              lon,
+            },
+            inline: `Math.floor(doc['location'].planeDistance(params.lat,params.lon))`
+          }
+        }
+      },
+    },
+  };
+  const result = await client.search(config);
+  const { hits } = result.body.hits;
+  return hits.map((hit) => hit);
+}
+
+function getClosest(templateResult) {
+  if (!templateResult || !templateResult.length) {
+    return null;
+  }
+  const clearResults = templateResult.map((rawResult) => ({
+    pk: rawResult._source.pk,
+    location: rawResult._source.location,
+    distance: rawResult.fields.distance[0],
+  }));
+  clearResults.sort((a, b) => a.distance - b.distance);
+  const [finalResult] = clearResults;
+  return finalResult;
+}
+
+async function syncRoads(indexName: string, rawRoad): Promise<void> {
+  const points = rawRoad.clearPoints || [];
+  console.info('Start syncing points', points.length);
+  for (let i = 0; i < points.length; i++) {
+    const templatePoints = await findDocumentsByQuery(indexName, Number(points[i].latitude), Number(points[i].longitude));
+    if (templatePoints.length) {
+      const closestPoint = getClosest(templatePoints);
+      console.log(`Point ${i}: original pk ${Math.floor(points[i].picket / 100)} -> template picket ${closestPoint.pk} -> diff ${closestPoint.distance}m`);
+      continue;
+    }
+    console.error(`Point ${i} found matches -> move out from track`);
+  }
+}
+
 async function start() {
+  console.clear();
   const mongoDb = await connect();
-  // await initIndex();
   const rawRoad = await getRawRoad(mongoDb, '5f489b43bd06504bcf3ed467');
+  const templateRoad = await getTemplateRoad(mongoDb, '5f23d97ba2db9630cc40dc3f');
   const indexName = `${rawRoad._id.toString()}`;
   await initIndex(indexName);
-  await processRoad(rawRoad, indexName);
-  const templateRoad = await getTemplateRoad(mongoDb, '5f23d97ba2db9630cc40dc3f');
+  const timeStart = moment();
+  console.info('Start processing', timeStart.toDate())
+  await processRoad(templateRoad, indexName);
+  await syncRoads(indexName, rawRoad);
 
   console.log('Template route points count', templateRoad.points.length);
 
-
-
   console.log('finished');
+
+  const timeStop = moment();
+  console.info('Stop processing', timeStop.toDate());
+  console.info(`Processing time ${timeStop.diff(timeStart, 'second')}s`);
 
   // @ts-ignore
   process.exit(0)
