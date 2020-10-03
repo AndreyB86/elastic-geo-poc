@@ -35,5 +35,16 @@ const queryExample = {
         }
       }
     }
+  },
+  "script_fields": {
+    "distance": {
+      "script": {
+        "params": {
+          "lat": 55.944451666666666,
+          "lon": 94.69433333333333
+        },
+        "inline": "Math.floor(doc['location'].planeDistance(params.lat,params.lon))"
+      }
+    }
   }
 }
