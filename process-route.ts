@@ -8,6 +8,9 @@ const client = new Client({ node: 'http://localhost:9200' })
 const databaseName = 'indor_back';
 const url = 'mongodb://mongo:mongo@192.168.100.6:27017';
 
+const rawRoadId = '5f489b43bd06504bcf3ed467';
+const templateRoadId = '5f23d97ba2db9630cc40dc3f';
+
 async function connect(): Promise<any> {
   return new Promise((resolve, reject) => {
     mongodb.MongoClient.connect(url, {}, (err, client) => {
@@ -110,7 +113,7 @@ async function findDocumentsByQuery(index: string, lat: number, lon: number): Pr
           },
           filter: {
             geo_distance: {
-              distance: '50m',
+              distance: '15m',
               location: {
                 lat,
                 lon,
@@ -151,31 +154,65 @@ function getClosest(templateResult) {
   return finalResult;
 }
 
-async function syncRoads(indexName: string, rawRoad): Promise<void> {
+async function syncRoads(indexName: string, rawRoad): Promise<Map<Number, any>> {
   const points = rawRoad.clearPoints || [];
+  const result = new Map<Number, any>();
   console.info('Start syncing points', points.length);
   for (let i = 0; i < points.length; i++) {
+    const point = points[i];
     const templatePoints = await findDocumentsByQuery(indexName, Number(points[i].latitude), Number(points[i].longitude));
     if (templatePoints.length) {
       const closestPoint = getClosest(templatePoints);
-      console.log(`Point ${i}: original pk ${Math.floor(points[i].picket / 100)} -> template picket ${closestPoint.pk} -> diff ${closestPoint.distance}m`);
+      console.log(`Point ${i}: original pk ${Math.floor(point.picket / 100)} -> template picket ${closestPoint.pk} -> diff ${closestPoint.distance}m`);
+      const processedPoint = {
+        ...point,
+        latitude: Number(point.latitude),
+        longitude: Number(point.longitude),
+        altitude: Number(point.altitude),
+        speed: Number(point.speed),
+        picket: closestPoint.pk,
+        distance: closestPoint.distance,
+      };
+      if (result.has(closestPoint.pk)) {
+        if (result.get(closestPoint.pk).distance > closestPoint.distance) {
+          result.set(closestPoint.pk, processedPoint);
+        }
+        continue;
+      }
+      result.set(closestPoint.pk, processedPoint);
       continue;
     }
     console.error(`Point ${i} found matches -> move out from track`);
   }
+  return result;
+}
+
+async function saveResult(mongoDb, idRoad, result) {
+  const resultArray = [];
+  result.forEach((value) => resultArray.push(value));
+  return new Promise((resolve, reject) => {
+    mongoDb.collection('Route').findOneAndUpdate({ _id: mongodb.ObjectId(idRoad) }, {
+      $set: {
+        processedPoints: resultArray
+      }
+    }, (err, result) => {
+      resolve();
+    });
+  });
 }
 
 async function start() {
   console.clear();
   const mongoDb = await connect();
-  const rawRoad = await getRawRoad(mongoDb, '5f489b43bd06504bcf3ed467');
-  const templateRoad = await getTemplateRoad(mongoDb, '5f23d97ba2db9630cc40dc3f');
+  const rawRoad = await getRawRoad(mongoDb, rawRoadId);
+  const templateRoad = await getTemplateRoad(mongoDb, templateRoadId);
   const indexName = `${rawRoad._id.toString()}`;
   await initIndex(indexName);
   const timeStart = moment();
   console.info('Start processing', timeStart.toDate())
   await processRoad(templateRoad, indexName);
-  await syncRoads(indexName, rawRoad);
+  const result = await syncRoads(indexName, rawRoad);
+  await saveResult(mongoDb, rawRoadId, result);
 
   console.log('Template route points count', templateRoad.points.length);
 
